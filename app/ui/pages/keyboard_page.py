@@ -1,7 +1,7 @@
 """Keyboard Clicker page — UI layout only; wired to worker/thread logic separately."""
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QStackedWidget,
@@ -17,13 +18,17 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from app.config import KeyboardMode
+from app.config import KeyboardMode, TimeUnit
+from app.core.keyboard_clicker import KeyboardClickerWorker, KeyboardClickSettings
 from app.ui.widgets import KeyCaptureEdit, PageHeader, StatusIndicator
 
 
 class KeyboardPage(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+
+        self._thread: QThread | None = None
+        self._worker: KeyboardClickerWorker | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 20)
@@ -53,6 +58,8 @@ class KeyboardPage(QWidget):
         self.mode_combo.currentIndexChanged.connect(self.mode_stack.setCurrentIndex)
 
         root.addLayout(self._build_control_bar())
+
+        self._wire_logic()
 
     # ---- panels -------------------------------------------------------
 
@@ -168,3 +175,109 @@ class KeyboardPage(QWidget):
         bar.addStretch(1)
         bar.addWidget(self.count_label)
         return bar
+
+    # ---- wiring -------------------------------------------------------
+
+    def _wire_logic(self) -> None:
+        self.start_btn.clicked.connect(self.start_clicking)
+        self.stop_btn.clicked.connect(self.stop_clicking)
+
+    # ---- clicker lifecycle ---------------------------------------------
+
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.isRunning()
+
+    def _unit(self, combo: QComboBox) -> TimeUnit:
+        return TimeUnit.MS if combo.currentText() == "ms" else TimeUnit.SEC
+
+    def _collect_settings(self) -> KeyboardClickSettings | None:
+        mode = self.mode_combo.currentData()
+
+        if mode in (KeyboardMode.SPAM, KeyboardMode.HOLD):
+            key_edit = self.spam_key_edit if mode is KeyboardMode.SPAM else self.hold_key_edit
+            if not key_edit.value():
+                QMessageBox.warning(self, "No key selected", "Click the key field and press a key first.")
+                return None
+        elif mode is KeyboardMode.MACRO and not self.macro_text_edit.toPlainText():
+            QMessageBox.warning(self, "Empty macro", "Type the text/sequence you want to loop-type.")
+            return None
+
+        return KeyboardClickSettings(
+            mode=mode,
+            key_text=(self.spam_key_edit.value() if mode is KeyboardMode.SPAM else self.hold_key_edit.value()),
+            interval_value=self.spam_interval_spin.value(),
+            interval_unit=self._unit(self.spam_unit_combo),
+            randomize=self.spam_random_check.isChecked(),
+            random_min=self.spam_random_min_spin.value(),
+            random_max=self.spam_random_max_spin.value(),
+            hold_duration_value=self.hold_duration_spin.value(),
+            hold_duration_unit=self._unit(self.hold_unit_combo),
+            macro_text=self.macro_text_edit.toPlainText(),
+            macro_interval_value=self.macro_interval_spin.value(),
+            macro_interval_unit=self._unit(self.macro_unit_combo),
+        )
+
+    def start_clicking(self) -> None:
+        if self.is_running():
+            return
+        settings = self._collect_settings()
+        if settings is None:
+            return
+
+        self._worker = KeyboardClickerWorker(settings)
+        self._thread = QThread(self)
+        self._worker.moveToThread(self._thread)
+
+        self._thread.started.connect(self._worker.run)
+        self._worker.status_changed.connect(self.status_indicator.set_status)
+        self._worker.count_changed.connect(lambda n: self.count_label.setText(f"Actions: {n}"))
+        self._worker.error.connect(self._on_error)
+        self._worker.finished.connect(self._on_finished)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.finished.connect(self._worker.deleteLater)
+        self._thread.finished.connect(self._thread.deleteLater)
+
+        self._thread.start()
+        self._set_inputs_enabled(False)
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+
+    def stop_clicking(self) -> None:
+        if self._worker is not None:
+            self._worker.request_stop()
+        self.stop_btn.setEnabled(False)
+
+    def toggle_pause(self) -> None:
+        if self._worker is not None and self.is_running():
+            self._worker.toggle_pause()
+
+    def _on_finished(self) -> None:
+        self._worker = None
+        self._thread = None
+        self.start_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self._set_inputs_enabled(True)
+
+    def _on_error(self, message: str) -> None:
+        QMessageBox.critical(self, "Keyboard Clicker error", message)
+
+    def _set_inputs_enabled(self, enabled: bool) -> None:
+        self.mode_combo.setEnabled(enabled)
+        for widget in (
+            self.spam_key_edit,
+            self.spam_interval_spin,
+            self.spam_unit_combo,
+            self.spam_random_check,
+            self.spam_random_min_spin,
+            self.spam_random_max_spin,
+            self.hold_key_edit,
+            self.hold_duration_spin,
+            self.hold_unit_combo,
+            self.macro_text_edit,
+            self.macro_interval_spin,
+            self.macro_unit_combo,
+        ):
+            widget.setEnabled(enabled)
+        if enabled:
+            self.spam_random_min_spin.setEnabled(self.spam_random_check.isChecked())
+            self.spam_random_max_spin.setEnabled(self.spam_random_check.isChecked())
