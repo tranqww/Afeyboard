@@ -282,13 +282,13 @@ class MainWindow(QMainWindow):
             return
         try:
             data = profile_manager.load_profile(name)
-        except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, "Failed to load profile", str(exc))
+            if "mouse" in data:
+                self.mouse_page.apply_dict(data["mouse"])
+            if "keyboard" in data:
+                self.keyboard_page.apply_dict(data["keyboard"])
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            QMessageBox.critical(self, "Failed to load profile", f"Profile '{name}' is invalid or corrupted:\n{exc}")
             return
-        if "mouse" in data:
-            self.mouse_page.apply_dict(data["mouse"])
-        if "keyboard" in data:
-            self.keyboard_page.apply_dict(data["keyboard"])
         self.statusBar().showMessage(f"Profile '{name}' loaded.", 4000)
 
     def _on_delete_profile(self) -> None:
@@ -324,12 +324,15 @@ class MainWindow(QMainWindow):
         if not data:
             return
         sp = self.settings_page
-        sp.start_stop_edit.set_value(data.get("start_stop_hotkey", DEFAULT_HOTKEY_START_STOP))
-        sp.pause_resume_edit.set_value(data.get("pause_resume_hotkey", DEFAULT_HOTKEY_PAUSE_RESUME))
-        sp.autostop_check.setChecked(bool(data.get("autostop_enabled", False)))
-        sp.autostop_spin.setValue(int(data.get("autostop_value", 10)))
-        sp.autostop_unit_combo.setCurrentText(data.get("autostop_unit", "Minutes"))
-        sp.start_minimized_check.setChecked(bool(data.get("start_minimized", False)))
+        try:
+            sp.start_stop_edit.set_value(data.get("start_stop_hotkey", DEFAULT_HOTKEY_START_STOP))
+            sp.pause_resume_edit.set_value(data.get("pause_resume_hotkey", DEFAULT_HOTKEY_PAUSE_RESUME))
+            sp.autostop_check.setChecked(bool(data.get("autostop_enabled", False)))
+            sp.autostop_spin.setValue(int(data.get("autostop_value", 10)))
+            sp.autostop_unit_combo.setCurrentText(data.get("autostop_unit", "Minutes"))
+            sp.start_minimized_check.setChecked(bool(data.get("start_minimized", False)))
+        except (TypeError, ValueError):
+            pass  # corrupted settings file: keep UI defaults rather than crash on startup
 
     def should_start_minimized(self) -> bool:
         return self.settings_page.start_minimized_check.isChecked()
