@@ -1,7 +1,7 @@
 """Keyboard Clicker page — UI layout only; wired to worker/thread logic separately."""
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QThread
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -24,6 +24,9 @@ from app.ui.widgets import KeyCaptureEdit, PageHeader, StatusIndicator
 
 
 class KeyboardPage(QWidget):
+    status_changed = pyqtSignal(object)
+    run_finished = pyqtSignal()
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
@@ -229,7 +232,7 @@ class KeyboardPage(QWidget):
         self._worker.moveToThread(self._thread)
 
         self._thread.started.connect(self._worker.run)
-        self._worker.status_changed.connect(self.status_indicator.set_status)
+        self._worker.status_changed.connect(self._on_status_changed)
         self._worker.count_changed.connect(lambda n: self.count_label.setText(f"Actions: {n}"))
         self._worker.error.connect(self._on_error)
         self._worker.finished.connect(self._on_finished)
@@ -251,12 +254,17 @@ class KeyboardPage(QWidget):
         if self._worker is not None and self.is_running():
             self._worker.toggle_pause()
 
+    def _on_status_changed(self, status) -> None:
+        self.status_indicator.set_status(status)
+        self.status_changed.emit(status)
+
     def _on_finished(self) -> None:
         self._worker = None
         self._thread = None
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self._set_inputs_enabled(True)
+        self.run_finished.emit()
 
     def _on_error(self, message: str) -> None:
         QMessageBox.critical(self, "Keyboard Clicker error", message)
@@ -281,3 +289,43 @@ class KeyboardPage(QWidget):
         if enabled:
             self.spam_random_min_spin.setEnabled(self.spam_random_check.isChecked())
             self.spam_random_max_spin.setEnabled(self.spam_random_check.isChecked())
+
+    # ---- profile (de)serialization --------------------------------------
+
+    def to_dict(self) -> dict:
+        return {
+            "mode": self.mode_combo.currentData().name,
+            "spam_key": self.spam_key_edit.value(),
+            "spam_interval_value": self.spam_interval_spin.value(),
+            "spam_interval_unit": self.spam_unit_combo.currentText(),
+            "spam_randomize": self.spam_random_check.isChecked(),
+            "spam_random_min": self.spam_random_min_spin.value(),
+            "spam_random_max": self.spam_random_max_spin.value(),
+            "hold_key": self.hold_key_edit.value(),
+            "hold_duration_value": self.hold_duration_spin.value(),
+            "hold_duration_unit": self.hold_unit_combo.currentText(),
+            "macro_text": self.macro_text_edit.toPlainText(),
+            "macro_interval_value": self.macro_interval_spin.value(),
+            "macro_interval_unit": self.macro_unit_combo.currentText(),
+        }
+
+    def apply_dict(self, data: dict) -> None:
+        mode = KeyboardMode.__members__.get(data.get("mode", ""), KeyboardMode.SPAM)
+        index = self.mode_combo.findData(mode)
+        self.mode_combo.setCurrentIndex(max(index, 0))
+        self.mode_stack.setCurrentIndex(max(index, 0))
+
+        self.spam_key_edit.set_value(data.get("spam_key", ""))
+        self.spam_interval_spin.setValue(float(data.get("spam_interval_value", 100.0)))
+        self.spam_unit_combo.setCurrentText(data.get("spam_interval_unit", "ms"))
+        self.spam_random_check.setChecked(bool(data.get("spam_randomize", False)))
+        self.spam_random_min_spin.setValue(float(data.get("spam_random_min", 50.0)))
+        self.spam_random_max_spin.setValue(float(data.get("spam_random_max", 150.0)))
+
+        self.hold_key_edit.set_value(data.get("hold_key", ""))
+        self.hold_duration_spin.setValue(float(data.get("hold_duration_value", 1000.0)))
+        self.hold_unit_combo.setCurrentText(data.get("hold_duration_unit", "ms"))
+
+        self.macro_text_edit.setPlainText(data.get("macro_text", ""))
+        self.macro_interval_spin.setValue(float(data.get("macro_interval_value", 1000.0)))
+        self.macro_unit_combo.setCurrentText(data.get("macro_interval_unit", "ms"))

@@ -15,7 +15,8 @@ def main() -> int:
     app.setFont(QFont("Segoe UI", 9))
 
     window = MainWindow()
-    window.show()
+    if not window.should_start_minimized():
+        window.show()
 
     return app.exec()
 

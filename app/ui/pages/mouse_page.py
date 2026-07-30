@@ -1,7 +1,7 @@
 """Mouse Clicker page — UI layout only; wired to worker/thread logic separately."""
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QThread
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -31,6 +31,9 @@ from app.ui.widgets import PageHeader, StatusIndicator
 
 
 class MousePage(QWidget):
+    status_changed = pyqtSignal(object)
+    run_finished = pyqtSignal()
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
@@ -358,7 +361,7 @@ class MousePage(QWidget):
         self._worker.moveToThread(self._thread)
 
         self._thread.started.connect(self._worker.run)
-        self._worker.status_changed.connect(self.status_indicator.set_status)
+        self._worker.status_changed.connect(self._on_status_changed)
         self._worker.count_changed.connect(lambda n: self.count_label.setText(f"Clicks: {n}"))
         self._worker.error.connect(self._on_error)
         self._worker.finished.connect(self._on_finished)
@@ -380,12 +383,17 @@ class MousePage(QWidget):
         if self._worker is not None and self.is_running():
             self._worker.toggle_pause()
 
+    def _on_status_changed(self, status: ClickerStatus) -> None:
+        self.status_indicator.set_status(status)
+        self.status_changed.emit(status)
+
     def _on_finished(self) -> None:
         self._worker = None
         self._thread = None
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self._set_inputs_enabled(True)
+        self.run_finished.emit()
 
     def _on_error(self, message: str) -> None:
         QMessageBox.critical(self, "Mouse Clicker error", message)
@@ -420,3 +428,73 @@ class MousePage(QWidget):
             self.random_min_spin.setEnabled(self.random_check.isChecked())
             self.random_max_spin.setEnabled(self.random_check.isChecked())
             self.limit_spin.setEnabled(self.limit_fixed_radio.isChecked())
+
+    # ---- profile (de)serialization --------------------------------------
+
+    def to_dict(self) -> dict:
+        if self.pos_fixed_radio.isChecked():
+            position_mode = "fixed"
+        elif self.pos_multi_radio.isChecked():
+            position_mode = "multi"
+        else:
+            position_mode = "current"
+
+        points = []
+        for row in range(self.points_table.rowCount()):
+            x_item = self.points_table.item(row, 0)
+            y_item = self.points_table.item(row, 1)
+            if x_item and y_item:
+                points.append([x_item.text(), y_item.text()])
+
+        return {
+            "button": self.button_combo.currentData().name,
+            "click_mode": self.mode_combo.currentData().name,
+            "interval_value": self.interval_spin.value(),
+            "interval_unit": self.unit_combo.currentText(),
+            "randomize": self.random_check.isChecked(),
+            "random_min": self.random_min_spin.value(),
+            "random_max": self.random_max_spin.value(),
+            "position_mode": position_mode,
+            "fixed_x": self.x_spin.value(),
+            "fixed_y": self.y_spin.value(),
+            "points": points,
+            "limit_mode": "fixed" if self.limit_fixed_radio.isChecked() else "infinite",
+            "limit_count": self.limit_spin.value(),
+            "return_cursor": self.return_cursor_check.isChecked(),
+        }
+
+    def apply_dict(self, data: dict) -> None:
+        button = MouseButtonOption.__members__.get(data.get("button", ""), MouseButtonOption.LEFT)
+        self.button_combo.setCurrentIndex(max(self.button_combo.findData(button), 0))
+
+        click_mode = ClickMode.__members__.get(data.get("click_mode", ""), ClickMode.SINGLE)
+        self.mode_combo.setCurrentIndex(max(self.mode_combo.findData(click_mode), 0))
+
+        self.interval_spin.setValue(float(data.get("interval_value", 100.0)))
+        self.unit_combo.setCurrentText(data.get("interval_unit", "ms"))
+        self.random_check.setChecked(bool(data.get("randomize", False)))
+        self.random_min_spin.setValue(float(data.get("random_min", 50.0)))
+        self.random_max_spin.setValue(float(data.get("random_max", 150.0)))
+
+        position_mode = data.get("position_mode", "current")
+        stack_index = {"current": 0, "fixed": 1, "multi": 2}.get(position_mode, 0)
+        (self.pos_fixed_radio if position_mode == "fixed" else
+         self.pos_multi_radio if position_mode == "multi" else
+         self.pos_current_radio).setChecked(True)
+        self.position_stack.setCurrentIndex(stack_index)
+
+        self.x_spin.setValue(int(data.get("fixed_x", 0)))
+        self.y_spin.setValue(int(data.get("fixed_y", 0)))
+
+        self.points_table.setRowCount(0)
+        for x, y in data.get("points", []):
+            row = self.points_table.rowCount()
+            self.points_table.insertRow(row)
+            self.points_table.setItem(row, 0, QTableWidgetItem(str(x)))
+            self.points_table.setItem(row, 1, QTableWidgetItem(str(y)))
+
+        is_fixed_limit = data.get("limit_mode", "infinite") == "fixed"
+        (self.limit_fixed_radio if is_fixed_limit else self.limit_infinite_radio).setChecked(True)
+        self.limit_spin.setValue(int(data.get("limit_count", 100)))
+
+        self.return_cursor_check.setChecked(bool(data.get("return_cursor", False)))

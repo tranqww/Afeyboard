@@ -68,15 +68,20 @@ class StatusIndicator(QWidget):
         layout.addWidget(self._dot)
         layout.addWidget(self._label)
 
+        self._status = ClickerStatus.IDLE
         self.set_status(ClickerStatus.IDLE)
 
     def set_status(self, status: ClickerStatus) -> None:
+        self._status = status
         color = STATUS_COLORS[status]
         self._dot.setStyleSheet(
             f"background-color: {color}; border-radius: 5px;"
         )
         self._label.setText(status.value)
         self._label.setStyleSheet(f"font-weight: 600; color: {color};")
+
+    def status(self) -> ClickerStatus:
+        return self._status
 
 
 class PageHeader(QWidget):
