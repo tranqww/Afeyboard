@@ -72,6 +72,15 @@ pip install -r requirements.txt
 python main.py
 ```
 
+### Building a standalone .exe (Windows)
+
+```bash
+pip install pyinstaller
+pyinstaller --noconfirm --onefile --windowed --name Afeyboard --icon=assets/icon.ico main.py
+```
+
+Output: `dist/Afeyboard.exe` — a single-file executable, no Python install required on the target machine.
+
 Windows is the primary target platform; the app also runs on macOS/Linux via pynput, though OS-level permissions (e.g. macOS Accessibility access, or side mouse button support) may vary.
 
 ## Notes
